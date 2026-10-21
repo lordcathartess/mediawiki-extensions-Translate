@@ -103,6 +103,29 @@ class HooksTest extends MediaWikiIntegrationTestCase {
 		);
 	}
 
+	public function testTranslationPagesAreNotAddedToCategories(): void {
+		$sourceTitle = Title::newFromText( 'Categorized translatable page' );
+		$sourceText = "<translate>pupu</translate>\n[[Category:Translatable source category]]";
+		$sourceEdit = $this->editPage( $sourceTitle, $sourceText );
+		$sourcePage = TranslatablePage::newFromTitle( $sourceTitle );
+		$sourcePage->addMarkedTag( $sourceEdit->getNewRevision()->getId() );
+		MessageGroups::singleton()->recache();
+
+		$translationTitle = Title::newFromText( 'Categorized translatable page/fi' );
+		RenderTranslationPageJob::newJob( $translationTitle )->run();
+
+		$this->assertArrayHasKey(
+			'Category:Translatable source category',
+			$sourceTitle->getParentCategories(),
+			'The source page remains in its category'
+		);
+		$this->assertSame(
+			[],
+			$translationTitle->getParentCategories(),
+			'The translation page is not added to the source page category'
+		);
+	}
+
 	public function testLanguagesTagLinksToCustomTranslationPage(): void {
 		$sourceTitle = Title::newFromText( 'Custom language links' );
 		$sourceText = "<languages />\n<translate>Welcome</translate>";

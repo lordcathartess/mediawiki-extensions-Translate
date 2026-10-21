@@ -712,8 +712,13 @@ class HookHandler implements
 
 		$linkTarget = TitleValue::newFromPage( $pageReference );
 		$handle = new MessageHandle( $linkTarget );
+		$parserOutput = $parser->getOutput();
+		if ( $parserOutput->getExtensionData( 'translate-translation-page' ) !== null ) {
+			$parserOutput->setCategories( [] );
+			return;
+		}
+
 		if ( $handle->isMessageNamespace() && !$handle->isDoc() ) {
-			$parserOutput = $parser->getOutput();
 			$names = $parserOutput->getCategoryNames();
 			$parserCategories = [];
 			foreach ( $names as $name ) {

@@ -24,11 +24,14 @@ class RevTagStore {
 	public const TP_MARK_TAG = 'tp:mark';
 	/** Indicates a revision of a translatable page that is marked for translation. */
 	public const TP_READY_TAG = 'tp:tag';
+	/** Stores the source page id and language code for a custom translation page title. */
+	public const TP_TRANSLATION_PAGE_TAG = 'tp:translation';
 	/** Indicates a revision of a page that is a valid message bundle. */
 	public const MB_VALID_TAG = 'mb:valid';
 
 	private IConnectionProvider $dbProvider;
 	private array $tagCache = [];
+	private array $translationPageMappingCache = [];
 
 	public function __construct( IConnectionProvider $dbProvider ) {
 		$this->dbProvider = $dbProvider;
@@ -70,11 +73,71 @@ class RevTagStore {
 			->execute();
 
 		$this->tagCache[$articleId][$tag] = $revisionId;
+		if ( $tag === self::TP_TRANSLATION_PAGE_TAG ) {
+			unset( $this->translationPageMappingCache[$articleId] );
+		}
 	}
 
 	public function getLatestRevisionWithTag( PageIdentity $identity, string $tag ): ?int {
 		$response = $this->getLatestRevisionsForTags( $identity, $tag );
 		return $response[$tag] ?? null;
+	}
+
+	/** @return array{sourcePageId:int,languageCode:string}|null */
+	public function getTranslationPageMapping( PageIdentity $identity ): ?array {
+		if ( !$identity->exists() ) {
+			return null;
+		}
+
+		$articleId = $identity->getId();
+		if ( array_key_exists( $articleId, $this->translationPageMappingCache ) ) {
+			return $this->translationPageMappingCache[$articleId];
+		}
+
+		$dbr = Utilities::getSafeReadDB();
+		$value = $dbr->newSelectQueryBuilder()
+			->select( 'rt_value' )
+			->from( 'revtag' )
+			->where( [
+				'rt_page' => $articleId,
+				'rt_type' => self::TP_TRANSLATION_PAGE_TAG,
+			] )
+			->orderBy( 'rt_revision', SelectQueryBuilder::SORT_DESC )
+			->caller( __METHOD__ )
+			->fetchField();
+
+		if ( !is_string( $value ) ) {
+			return $this->translationPageMappingCache[$articleId] = null;
+		}
+
+		$mapping = unserialize( $value, [ 'allowed_classes' => false ] );
+		if ( !is_string( $mapping ) ) {
+			return $this->translationPageMappingCache[$articleId] = null;
+		}
+
+		[ $sourcePageId, $languageCode ] = array_pad( explode( '|', $mapping, 2 ), 2, '' );
+		if ( !ctype_digit( $sourcePageId ) || $languageCode === '' ) {
+			return $this->translationPageMappingCache[$articleId] = null;
+		}
+
+		return $this->translationPageMappingCache[$articleId] = [
+			'sourcePageId' => (int)$sourcePageId,
+			'languageCode' => $languageCode,
+		];
+	}
+
+	public function setTranslationPageMapping(
+		PageIdentity $translationPage,
+		int $sourcePageId,
+		string $languageCode,
+		int $revisionId
+	): void {
+		$this->replaceTag(
+			$translationPage,
+			self::TP_TRANSLATION_PAGE_TAG,
+			$revisionId,
+			[ (string)$sourcePageId, $languageCode ]
+		);
 	}
 
 	/** @return null|int[] */
@@ -139,6 +202,9 @@ class RevTagStore {
 			->execute();
 
 		unset( $this->tagCache[$articleId] );
+		if ( in_array( self::TP_TRANSLATION_PAGE_TAG, $tag, true ) ) {
+			unset( $this->translationPageMappingCache[$articleId] );
+		}
 	}
 
 	public function isRevIdFuzzy( int $articleId, int $revisionId ): bool {

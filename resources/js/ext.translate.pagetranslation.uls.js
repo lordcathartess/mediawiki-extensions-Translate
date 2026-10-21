@@ -8,14 +8,12 @@
 	 * @param {string} language
 	 */
 	mw.uls.changeLanguage = function ( language ) {
-		var page = 'Special:MyLanguage/' + mw.config.get( 'wgPageName' );
-
-		if ( mw.config.get( 'wgTranslatePageTranslation' ) === 'translation' ) {
-			page = page.replace( /\/[^/]+$/, '' );
-		}
+		var page = 'Special:MyLanguage/' + mw.config.get( 'wgTranslateSourcePage' ),
+			translationPageUrls = mw.config.get( 'wgTranslatePageTranslationUrls' ) || {},
+			url = translationPageUrls[ language ];
 
 		mw.uls.setLanguage( language ).then( function () {
-			location.href = mw.util.getUrl( page );
+			location.href = url || mw.util.getUrl( page );
 		} );
 	};
 }() );

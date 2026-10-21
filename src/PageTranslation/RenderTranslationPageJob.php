@@ -8,6 +8,7 @@ use MediaWiki\CommentStore\CommentStoreComment;
 use MediaWiki\Context\RequestContext;
 use MediaWiki\Extension\Translate\Jobs\GenericTranslateJob;
 use MediaWiki\Extension\Translate\MessageGroupProcessing\DeleteTranslatableBundleJob;
+use MediaWiki\Extension\Translate\Services;
 use MediaWiki\Extension\Translate\MessageLoading\MessageHandle;
 use MediaWiki\Extension\Translate\SystemUsers\FuzzyBot;
 use MediaWiki\MediaWikiServices;
@@ -52,6 +53,32 @@ class RenderTranslationPageJob extends GenericTranslateJob {
 		return $job;
 	}
 
+	public static function newJobForPage(
+		TranslatablePage $page,
+		string $languageCode,
+		?string $triggerAction = null,
+		?string $unitTitleText = null
+	): self {
+		$job = self::newJob(
+			$page->getTranslationPageTitle( $languageCode ),
+			$triggerAction,
+			$unitTitleText
+		);
+		$job->params['sourcePageId'] = $page->getTitle()->getArticleID();
+		$job->params['targetLanguage'] = $languageCode;
+		return $job;
+	}
+
+	public static function newNonPrioritizedJobForPage(
+		TranslatablePage $page,
+		string $languageCode
+	): self {
+		$job = self::newNonPrioritizedJob( $page->getTranslationPageTitle( $languageCode ) );
+		$job->params['sourcePageId'] = $page->getTitle()->getArticleID();
+		$job->params['targetLanguage'] = $languageCode;
+		return $job;
+	}
+
 	public function __construct( Title $title, array $params = [] ) {
 		parent::__construct( 'RenderTranslationPageJob', $title, $params );
 		$this->removeDuplicates = true;
@@ -69,11 +96,23 @@ class RenderTranslationPageJob extends GenericTranslateJob {
 		// Initialization
 		$translationPageTitle = $this->title;
 
-		$tpPage = TranslatablePage::getTranslationPageFromTitle( $translationPageTitle );
-		if ( !$tpPage ) {
+		if ( isset( $this->params['sourcePageId'], $this->params['targetLanguage'] ) ) {
+			$sourceTitle = Title::newFromID( (int)$this->params['sourcePageId'] );
+			$translatablePage = $sourceTitle ? TranslatablePage::newFromTitle( $sourceTitle ) : null;
+			if ( $translatablePage && $translatablePage->getMarkedTag() === null ) {
+				$translatablePage = null;
+			}
+			$targetLanguage = (string)$this->params['targetLanguage'];
+		} else {
+			$translatablePage = TranslatablePage::isTranslationPage( $translationPageTitle ) ?: null;
+			$targetLanguage = ( new MessageHandle( $translationPageTitle ) )->getCode();
+		}
+
+		if ( !$translatablePage || $targetLanguage === '' ) {
 			$this->logError( 'Cannot render translation page!' );
 			return false;
 		}
+		$tpPage = $translatablePage->getTranslationPage( $targetLanguage );
 
 		// Other stuff
 		$user = $this->getUser();
@@ -101,6 +140,30 @@ class RenderTranslationPageJob extends GenericTranslateJob {
 		// $percentageTranslated is modified by reference
 		$content = $tpPage->getPageContent( $mwServices->getParser(), $percentageTranslated );
 		$translationPageTitleExists = $translationPageTitle->exists();
+		$isCustomTranslationPage = !$translationPageTitle->equals(
+			$translatablePage->getTitle()->getSubpage( $targetLanguage )
+		);
+		if ( $isCustomTranslationPage ) {
+			$mapping = Services::getInstance()->getRevTagStore()
+				->getTranslationPageMapping( $translationPageTitle );
+			$mappingMatchesJob = $mapping !== null &&
+				$mapping['sourcePageId'] === $translatablePage->getTitle()->getArticleID() &&
+				$mapping['languageCode'] === $targetLanguage;
+
+			if ( $translationPageTitleExists && !$mappingMatchesJob ) {
+				Hooks::$allowTargetEdit = false;
+				$this->logError(
+					'Refusing to overwrite a custom translation page not linked to this source page and language.',
+					[ 'title' => $translationPageTitle->getPrefixedText() ]
+				);
+				return false;
+			}
+
+			$flags = $translationPageTitleExists ?
+				( $flags | EDIT_UPDATE ) & ~EDIT_NEW :
+				( $flags | EDIT_NEW ) & ~EDIT_UPDATE;
+		}
+
 		if ( $percentageTranslated === 0 && !$translationPageTitleExists ) {
 			Hooks::$allowTargetEdit = false;
 			$this->logInfo( 'No translations found and translation page does not exist. Nothing to do.' );
@@ -126,7 +189,7 @@ class RenderTranslationPageJob extends GenericTranslateJob {
 			}
 
 			$pageUpdater->addTag( 'translate-translation-pages' );
-			$pageUpdater->saveRevision( $commentStoreComment, $flags );
+			$newRevisionRecord = $pageUpdater->saveRevision( $commentStoreComment, $flags );
 			$status = $pageUpdater->getStatus();
 
 			if ( !$status->isOK() ) {
@@ -141,6 +204,15 @@ class RenderTranslationPageJob extends GenericTranslateJob {
 						]
 					);
 				}
+			} elseif ( $translationPageTitle->getPrefixedDBkey() !==
+				$translatablePage->getTitle()->getSubpage( $targetLanguage )->getPrefixedDBkey()
+			) {
+				Services::getInstance()->getRevTagStore()->setTranslationPageMapping(
+					$translationPageTitle,
+					$translatablePage->getTitle()->getArticleID(),
+					$targetLanguage,
+					$newRevisionRecord ? $newRevisionRecord->getId() : $translationPageTitle->getLatestRevID()
+				);
 			}
 		}
 

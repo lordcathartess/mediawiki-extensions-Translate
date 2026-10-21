@@ -178,6 +178,40 @@
 	padding-bottom: 10px;
 }
 
+.mw-translate-custom-translation-page-form {
+	margin: 0 0 1em;
+	max-width: 52em;
+	padding: 1em 1.25em;
+	border: 1px solid #eaecf0;
+	border-radius: 2px;
+	background-color: #f8f9fa;
+}
+
+.mw-translate-custom-translation-page-form label {
+	display: block;
+	margin-bottom: 0.5em;
+	font-weight: bold;
+}
+
+.mw-translate-custom-translation-page-form input {
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 3em;
+	margin-bottom: 0.75em;
+	padding: 0.65em 0.75em;
+	font-size: 1.1em;
+}
+
+.mw-translate-custom-translation-page-form input:focus {
+	border-color: #36c;
+	box-shadow: inset 0 0 0 1px #36c;
+}
+
+.mw-translate-custom-translation-page-form p {
+	margin: 0 0 0.75em;
+}
+
 .tux-editor-header .description {
 	margin: 5px 0;
 }

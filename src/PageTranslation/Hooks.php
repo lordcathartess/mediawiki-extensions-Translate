@@ -111,7 +111,7 @@ class Hooks {
 
 		try {
 			self::$renderingContext = true;
-			[ , $code ] = Utilities::figureMessage( $title->getText() );
+			$code = $page->getTargetLanguageCode();
 			$name = $page->getPageDisplayTitle( $code );
 			if ( $name ) {
 				$name = $wikitextParser->recursivePreprocess( $name );
@@ -284,8 +284,9 @@ class Hooks {
 	public static function onPageContentLanguage( Title $title, &$pageLang ) {
 		// For translation pages, parse plural, grammar etc. with correct language,
 		// and set the right direction
-		if ( TranslatablePage::isTranslationPage( $title ) ) {
-			[ , $code ] = Utilities::figureMessage( $title->getText() );
+		$page = TranslatablePage::isTranslationPage( $title );
+		if ( $page ) {
+			$code = $page->getTargetLanguageCode();
 			$pageLang = MediaWikiServices::getInstance()->getLanguageFactory()->getLanguage( $code );
 		}
 	}
@@ -336,6 +337,15 @@ class Hooks {
 		$isTranslation = TranslatablePage::isTranslationPage( $title );
 
 		if ( $isSource || $isTranslation ) {
+			$page = $isTranslation ?: TranslatablePage::newFromTitle( $title );
+			$translationPageUrls = [];
+			foreach ( $page->getTranslationPages() as $translationPageTitle ) {
+				$languageCode = ( new MessageHandle( $translationPageTitle ) )->getCode();
+				if ( $languageCode !== '' ) {
+					$translationPageUrls[$languageCode] = $translationPageTitle->getLocalURL();
+				}
+			}
+
 			if ( $wgTranslatePageTranslationULS ) {
 				$out->addModules( 'ext.translate.pagetranslation.uls' );
 			}
@@ -347,7 +357,11 @@ class Hooks {
 
 			$out->addModuleStyles( 'ext.translate' );
 
-			$out->addJsConfigVars( 'wgTranslatePageTranslation', $isTranslation ? 'translation' : 'source' );
+			$out->addJsConfigVars( [
+				'wgTranslatePageTranslation' => $isTranslation ? 'translation' : 'source',
+				'wgTranslateSourcePage' => $page->getTitle()->getPrefixedText(),
+				'wgTranslatePageTranslationUrls' => $translationPageUrls,
+			] );
 		}
 	}
 
@@ -415,7 +429,7 @@ class Hooks {
 		?Title $unitTitle = null
 	): void {
 		$source = $page->getTitle();
-		$target = $source->getSubpage( $code );
+		$target = $page->getTranslationPageTitle( $code );
 		$mwInstance = MediaWikiServices::getInstance();
 
 		// We don't know and don't care
@@ -423,7 +437,12 @@ class Hooks {
 
 		// Update the target page
 		$unitTitleText = $unitTitle ? $unitTitle->getPrefixedText() : null;
-		$job = RenderTranslationPageJob::newJob( $target, $triggerAction, $unitTitleText );
+		$job = RenderTranslationPageJob::newJobForPage(
+			$page,
+			$code,
+			$triggerAction,
+			$unitTitleText
+		);
 		$session = null;
 		if ( !$user->equals( FuzzyBot::getUser() ) ) {
 			$session = RequestContext::getMain()->exportSession();
@@ -526,9 +545,9 @@ class Hooks {
 			$name = Utilities::getLanguageName( $code, LanguageNameUtils::AUTONYMS );
 
 			// Add links to other languages
-			$suffix = ( $code === $sourceLanguage ) ? '' : "/$code";
-			$targetTitleString = $pageTitle->getDBkey() . $suffix;
-			$subpage = Title::makeTitle( $pageTitle->getNamespace(), $targetTitleString );
+			$subpage = $code === $sourceLanguage ?
+				$pageTitle :
+				$page->getTranslationPageTitle( $code );
 
 			$classes = [];
 			if ( $code === $userLangCode ) {
@@ -726,13 +745,13 @@ class Hooks {
 		// Batch the Title::exists queries used below
 		$lb = $mwServices->getLinkBatchFactory()->newLinkBatch();
 		foreach ( array_keys( $languages ) as $code ) {
-			$title = $page->getTitle()->getSubpage( $code );
+			$title = $page->getTranslationPageTitle( $code );
 			$lb->addObj( $title );
 		}
 		$lb->execute();
 		$languageNameUtils = $mwServices->getLanguageNameUtils();
 		foreach ( $languages as $code => $percentage ) {
-			$title = $page->getTitle()->getSubpage( $code );
+			$title = $page->getTranslationPageTitle( $code );
 			$key = "x-pagetranslation:{$title->getPrefixedText()}";
 			$translatedName = $page->getPageDisplayTitle( $code ) ?: $title->getPrefixedText();
 
@@ -1177,7 +1196,7 @@ class Hooks {
 				return false;
 			}
 
-			[ , $code ] = Utilities::figureMessage( $title->getText() );
+			$code = $page->getTargetLanguageCode();
 
 			$translationUrl = $mwService->getUrlUtils()->expand(
 				$page->getTranslationUrl( $code ), PROTO_RELATIVE
@@ -1344,7 +1363,7 @@ class Hooks {
 			return;
 		}
 
-		[ , $code ] = Utilities::figureMessage( $title->getText() );
+		$code = $page->getTargetLanguageCode();
 
 		// Get the translation percentage
 		$pers = $page->getTranslationPercentages();
@@ -1720,7 +1739,8 @@ class Hooks {
 			$reason,
 			$fname
 		) {
-			$translationPageTitle = $target->getSubpage( $langCode );
+			$page = TranslatablePage::newFromTitle( $target );
+			$translationPageTitle = $page->getTranslationPageTitle( $langCode );
 			// Do a more thorough check for the translation page in case the translation page is deleted in a
 			// different transaction.
 			if ( !$translationPageTitle || !$translationPageTitle->exists( IDBAccessObject::READ_LATEST ) ) {
@@ -1728,8 +1748,6 @@ class Hooks {
 			}
 
 			$dbw->startAtomic( $fname );
-
-			$page = TranslatablePage::newFromTitle( $target );
 
 			if ( !$handle->isDoc() ) {
 				$unitTitle = $handle->getTitle();

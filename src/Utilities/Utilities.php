@@ -460,7 +460,7 @@ class Utilities {
 			return false;
 		}
 
-		$baseTitle = Title::makeTitle( $handle->getTitle()->getNamespace(), $key );
+		$baseTitle = $handle->getTitleForBase();
 		if ( !TranslatablePage::isSourcePage( $baseTitle ) ) {
 			return false;
 		}

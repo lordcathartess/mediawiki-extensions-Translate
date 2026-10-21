@@ -11,6 +11,7 @@ use MediaWiki\Extension\Translate\MessageGroupProcessing\MoveTranslatableBundleJ
 use MediaWiki\Extension\Translate\MessageGroupProcessing\SubpageListBuilder;
 use MediaWiki\Extension\Translate\MessageGroupProcessing\TranslatableBundle;
 use MediaWiki\Extension\Translate\MessageGroupProcessing\TranslatableBundleFactory;
+use MediaWiki\Extension\Translate\MessageLoading\MessageHandle;
 use MediaWiki\Extension\Translate\SystemUsers\FuzzyBot;
 use MediaWiki\Message\Message;
 use MediaWiki\Page\MovePageFactory;
@@ -266,6 +267,15 @@ class TranslatableBundleMover {
 		$sourceBundle = $this->bundleFactory->getValidBundle( $source );
 
 		$classifiedSubpages = $this->subpageBuilder->getSubpagesPerType( $sourceBundle, $moveTalkPages );
+		$sourcePage = TranslatablePage::newFromTitle( $source );
+		$translationPagesToMove = [];
+		foreach ( $classifiedSubpages['translationPages'] as $translationPage ) {
+			$languageCode = ( new MessageHandle( $translationPage ) )->getCode();
+			if ( !$sourcePage->hasCustomTranslationPageTitle( $languageCode ) ) {
+				$translationPagesToMove[] = $translationPage;
+			}
+		}
+		$classifiedSubpages['translationPages'] = $translationPagesToMove;
 
 		$talkPages = $moveTalkPages ? $classifiedSubpages['talkPages'] : [];
 		$subpages = $moveSubPages ? $classifiedSubpages['normalSubpages'] : [];

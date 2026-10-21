@@ -61,4 +61,5 @@ class QueryMessageCollectionActionApiTest extends ApiTestCase {
 		$this->assertArrayNotHasKey( 'errors', $response,
 			'no error triggered when source language same as target language.' );
 	}
+
 }

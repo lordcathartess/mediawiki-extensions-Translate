@@ -103,6 +103,34 @@ class HooksTest extends MediaWikiIntegrationTestCase {
 		);
 	}
 
+	public function testLanguagesTagLinksToCustomTranslationPage(): void {
+		$sourceTitle = Title::newFromText( 'Custom language links' );
+		$sourceText = "<languages />\n<translate>Welcome</translate>";
+		$sourceContent = ContentHandler::makeContent( $sourceText, $sourceTitle );
+		$sourceEdit = $this->editPage( $sourceTitle, $sourceContent );
+		$sourcePage = TranslatablePage::newFromTitle( $sourceTitle );
+		$sourcePage->addMarkedTag( $sourceEdit->getNewRevision()->getId() );
+		MessageGroups::singleton()->recache();
+
+		$customTitle = Title::newFromText( 'Custom German page' );
+		$sourcePage->setTranslationPageTitle( 'de', $customTitle );
+		$translationEdit = $this->editPage(
+			$customTitle,
+			ContentHandler::makeContent( 'Willkommen', $customTitle )
+		);
+		Services::getInstance()->getRevTagStore()->setTranslationPageMapping(
+			$customTitle,
+			$sourceTitle->getArticleID(),
+			'de',
+			$translationEdit->getNewRevision()->getId()
+		);
+
+		$parser = $this->getServiceContainer()->getParserFactory()->getInstance();
+		$parserOutput = $parser->parse( $sourceText, $sourceTitle, ParserOptions::newFromAnon() );
+
+		$this->assertStringContainsString( $customTitle->getLocalURL(), $parserOutput->getText() );
+	}
+
 	public function testTRANSLATABLEPAGE() {
 		// Setup objects
 		$translatablePageTitle = Title::newFromText( 'TRANSLATABLEPAGE test' );

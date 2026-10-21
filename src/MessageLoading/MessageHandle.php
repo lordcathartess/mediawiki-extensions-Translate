@@ -7,6 +7,7 @@ use BadMethodCallException;
 use Language;
 use MediaWiki\Extension\Translate\MessageGroupProcessing\MessageGroups;
 use MediaWiki\Extension\Translate\MessageGroupProcessing\RevTagStore;
+use MediaWiki\Extension\Translate\PageTranslation\TranslatablePage;
 use MediaWiki\Extension\Translate\Services;
 use MediaWiki\Linker\LinkTarget;
 use MediaWiki\Logger\LoggerFactory;
@@ -25,6 +26,7 @@ class MessageHandle {
 	private LinkTarget $title;
 	private ?string $key = null;
 	private ?string $languageCode = null;
+	private ?Title $baseTitle = null;
 	/** @var string[]|null */
 	private ?array $groupIds = null;
 	private MessageIndex $messageIndex;
@@ -48,6 +50,20 @@ class MessageHandle {
 	 */
 	public function figureMessage(): array {
 		if ( $this->key === null ) {
+			$title = Title::newFromLinkTarget( $this->title );
+			if ( $title->getNamespace() !== NS_TRANSLATIONS ) {
+				$mapping = Services::getInstance()->getRevTagStore()
+					->getTranslationPageMapping( $title );
+				if ( $mapping !== null ) {
+					$this->baseTitle = Title::newFromID( $mapping['sourcePageId'] );
+					if ( $this->baseTitle ) {
+						$this->key = $this->baseTitle->getDBkey();
+						$this->languageCode = $mapping['languageCode'];
+						return [ $this->key, $this->languageCode ];
+					}
+				}
+			}
+
 			// Check if this is a valid message first
 			$this->key = $this->title->getDBkey();
 			$known = $this->messageIndex->getGroupIds( $this ) !== [];
@@ -186,6 +202,12 @@ class MessageHandle {
 
 	/** Get the original title with the passed language code. */
 	public function getTitleForLanguage( string $languageCode ): Title {
+		$this->figureMessage();
+		if ( $this->baseTitle !== null ) {
+			return TranslatablePage::newFromTitle( $this->baseTitle )
+				->getTranslationPageTitle( $languageCode );
+		}
+
 		return Title::makeTitle(
 			$this->title->getNamespace(),
 			$this->getKey() . "/$languageCode"
@@ -194,6 +216,11 @@ class MessageHandle {
 
 	/** Get the title for the page base. */
 	public function getTitleForBase(): Title {
+		$this->figureMessage();
+		if ( $this->baseTitle !== null ) {
+			return $this->baseTitle;
+		}
+
 		return Title::makeTitle(
 			$this->title->getNamespace(),
 			$this->getKey()

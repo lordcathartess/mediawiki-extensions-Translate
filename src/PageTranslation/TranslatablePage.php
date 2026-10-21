@@ -44,6 +44,7 @@ class TranslatablePage extends TranslatableBundle {
 		'priorityforce',
 		'prioritylangs',
 		'priorityreason',
+		'translationpages',
 		'transclusion',
 		'version'
 	];
@@ -274,6 +275,14 @@ class TranslatablePage extends TranslatableBundle {
 		);
 	}
 
+	public function getTargetLanguageCode(): string {
+		if ( $this->targetLanguage === null ) {
+			throw new LogicException( 'Translation page language has not been determined' );
+		}
+
+		return $this->targetLanguage;
+	}
+
 	/** Adds a tag which indicates that this page is suitable for translation. */
 	public function addMarkedTag( int $revision, ?array $value = null ) {
 		$this->revTagStore->replaceTag( $this->getPageIdentity(), RevTagStore::TP_MARK_TAG, $revision, $value );
@@ -334,18 +343,12 @@ class TranslatablePage extends TranslatableBundle {
 	/** @inheritDoc */
 	public function getTranslationPages(): array {
 		$mwServices = MediaWikiServices::getInstance();
-
-		$messageGroup = $this->getMessageGroup();
-		$knownLanguageCodes = $messageGroup ? $messageGroup->getTranslatableLanguages() : null;
-		$knownLanguageCodes ??= Utilities::getLanguageNames( LanguageNameUtils::AUTONYMS );
-
-		$prefixedDbTitleKey = $this->getPageIdentity()->getDBkey() . '/';
-		$baseNamespace = $this->getPageIdentity()->getNamespace();
+		$translationPageTitles = $this->getTranslationPageTitles();
 
 		// Build a link batch query for all translation pages
 		$linkBatch = $mwServices->getLinkBatchFactory()->newLinkBatch();
-		foreach ( array_keys( $knownLanguageCodes ) as $code ) {
-			$linkBatch->add( $baseNamespace, $prefixedDbTitleKey . $code );
+		foreach ( $translationPageTitles as $title ) {
+			$linkBatch->add( $title->getNamespace(), $title->getDBkey() );
 		}
 
 		$translationPages = [];
@@ -356,6 +359,87 @@ class TranslatablePage extends TranslatableBundle {
 		}
 
 		return $translationPages;
+	}
+
+	/**
+	 * Get the title used for a page translated into the given language.
+	 */
+	public function getTranslationPageTitle( string $languageCode ): Title {
+		$customTitles = $this->getCustomTranslationPageTitles();
+		return $customTitles[$languageCode] ?? $this->getTitle()->getSubpage( $languageCode );
+	}
+
+	public function hasCustomTranslationPageTitle( string $languageCode ): bool {
+		return isset( $this->getCustomTranslationPageTitles()[$languageCode] );
+	}
+
+	public function setTranslationPageTitle( string $languageCode, ?Title $title ): void {
+		$customTitles = $this->getCustomTranslationPageTitles();
+		if ( $title === null ) {
+			unset( $customTitles[$languageCode] );
+		} else {
+			$customTitles[$languageCode] = $title;
+		}
+
+		$storedTitles = [];
+		foreach ( $customTitles as $code => $customTitle ) {
+			$storedTitles[$code] = $customTitle->getPrefixedText();
+		}
+
+		$metadata = Services::getInstance()->getMessageGroupMetadata();
+		$metadata->set(
+			$this->getMessageGroupId(),
+			'translationpages',
+			$storedTitles === [] ? false : json_encode( $storedTitles, JSON_THROW_ON_ERROR )
+		);
+	}
+
+	private function getTranslationPageTitles(): array {
+		$messageGroup = $this->getMessageGroup();
+		$knownLanguageCodes = $messageGroup ? $messageGroup->getTranslatableLanguages() : null;
+		$knownLanguageCodes ??= Utilities::getLanguageNames( LanguageNameUtils::AUTONYMS );
+		$customTitles = $this->getCustomTranslationPageTitles();
+		$titles = [];
+
+		foreach ( array_keys( $knownLanguageCodes ) as $languageCode ) {
+			$titles[$languageCode] = $customTitles[$languageCode] ??
+				$this->getTitle()->getSubpage( $languageCode );
+		}
+
+		foreach ( $customTitles as $languageCode => $title ) {
+			$titles[$languageCode] = $title;
+		}
+
+		return $titles;
+	}
+
+	/** @return array<string,Title> */
+	private function getCustomTranslationPageTitles(): array {
+		$storedTitles = Services::getInstance()->getMessageGroupMetadata()
+			->get( $this->getMessageGroupId(), 'translationpages' );
+		if ( !is_string( $storedTitles ) ) {
+			return [];
+		}
+
+		$decodedTitles = json_decode( $storedTitles, true, 512, JSON_THROW_ON_ERROR );
+		if ( !is_array( $decodedTitles ) ) {
+			throw new RuntimeException( 'Invalid custom translation page title metadata' );
+		}
+
+		$titles = [];
+		foreach ( $decodedTitles as $languageCode => $titleText ) {
+			if ( !is_string( $languageCode ) || !is_string( $titleText ) ) {
+				throw new RuntimeException( 'Invalid custom translation page title metadata' );
+			}
+
+			$title = Title::newFromText( $titleText );
+			if ( !$title ) {
+				throw new RuntimeException( 'Invalid custom translation page title metadata' );
+			}
+			$titles[$languageCode] = $title;
+		}
+
+		return $titles;
 	}
 
 	/** @inheritDoc */
@@ -429,9 +513,13 @@ class TranslatablePage extends TranslatableBundle {
 	}
 
 	public function getRevisionRecordWithFallback(): ?RevisionRecord {
+		if ( $this->targetLanguage === null ) {
+			throw new LogicException( 'Translation page language has not been determined' );
+		}
+
 		$title = $this->getTitle();
 		$store = MediaWikiServices::getInstance()->getRevisionStore();
-		$revRecord = $store->getRevisionByTitle( $title->getSubpage( $this->targetLanguage ) );
+		$revRecord = $store->getRevisionByTitle( $this->getTranslationPageTitle( $this->targetLanguage ) );
 		if ( $revRecord ) {
 			return $revRecord;
 		}
@@ -452,6 +540,22 @@ class TranslatablePage extends TranslatableBundle {
 
 	/** @return bool|self */
 	public static function isTranslationPage( Title $title ) {
+		$mapping = Services::getInstance()->getRevTagStore()->getTranslationPageMapping( $title );
+		if ( $mapping !== null ) {
+			$sourceTitle = Title::newFromID( $mapping['sourcePageId'] );
+			if ( !$sourceTitle ) {
+				return false;
+			}
+
+			$page = self::newFromTitle( $sourceTitle );
+			if ( $page->getMarkedTag() === null ) {
+				return false;
+			}
+
+			$page->targetLanguage = $mapping['languageCode'];
+			return $page;
+		}
+
 		$handle = new MessageHandle( $title );
 		if ( !Utilities::isTranslationPage( $handle ) ) {
 			return false;

@@ -6,6 +6,7 @@ namespace MediaWiki\Extension\Translate\PageTranslation;
 use ErrorPageError;
 use MediaWiki\Extension\Translate\MessageBundleTranslation\MessageBundle;
 use MediaWiki\Extension\Translate\MessageGroupProcessing\TranslatableBundleFactory;
+use MediaWiki\Extension\Translate\MessageLoading\MessageHandle;
 use MediaWiki\Extension\Translate\Utilities\Utilities;
 use MediaWiki\HTMLForm\HTMLForm;
 use MediaWiki\Output\OutputPage;
@@ -96,7 +97,7 @@ class DeleteTranslatableBundleSpecialPage extends UnlistedSpecialPage {
 		$this->entityType = $entityType;
 
 		if ( $this->isTranslation() ) {
-			[ , $this->code ] = Utilities::figureMessage( $this->title->getText() );
+			$this->code = ( new MessageHandle( $this->title ) )->getCode();
 		} else {
 			$this->code = null;
 		}

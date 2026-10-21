@@ -8,6 +8,9 @@ use Language;
 use MediaWiki\Config\Config;
 use MediaWiki\Extension\Translate\HookRunner;
 use MediaWiki\Extension\Translate\MessageGroupProcessing\MessageGroups;
+use MediaWiki\Extension\Translate\PageTranslation\RenderTranslationPageJob;
+use MediaWiki\Extension\Translate\PageTranslation\TranslatablePage;
+use MediaWiki\Extension\Translate\Services;
 use MediaWiki\Extension\Translate\Utilities\Utilities;
 use MediaWiki\Html\Html;
 use MediaWiki\Languages\LanguageFactory;
@@ -15,9 +18,11 @@ use MediaWiki\Languages\LanguageNameUtils;
 use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\MediaWikiServices;
 use MediaWiki\SpecialPage\SpecialPage;
+use MediaWiki\Title\Title;
 use MessageGroup;
 use Psr\Log\LoggerInterface;
 use Skin;
+use WikiPageMessageGroup;
 
 /**
  * Implements the core of Translate extension - a special page which shows
@@ -74,6 +79,7 @@ class TranslateSpecialPage extends SpecialPage {
 		$this->setHeaders();
 
 		$this->setup( $parameters );
+		$this->handleCustomTranslationPageTitleSubmission();
 
 		// Redirect old export URLs to Special:ExportTranslations
 		if ( $this->getRequest()->getText( 'taction' ) === 'export' ) {
@@ -93,6 +99,7 @@ class TranslateSpecialPage extends SpecialPage {
 		] ) );
 
 		$out->addHTML( $this->tuxSettingsForm() );
+		$out->addHTML( $this->tuxCustomTranslationPageForm() );
 		$out->addHTML( $this->messageSelector() );
 
 		$table = new MessageTable( $this->getContext(), $this->group, $this->options['language'] );
@@ -185,6 +192,183 @@ class TranslateSpecialPage extends SpecialPage {
 			$this->tuxGroupWarning();
 
 		return Html::rawElement( 'div', $attrs, $selectors ) . $noJs;
+	}
+
+	private function tuxCustomTranslationPageForm(): string {
+		if (
+			!$this->getUser()->isAllowed( 'pagetranslation' ) ||
+			!$this->group instanceof WikiPageMessageGroup
+		) {
+			return '';
+		}
+
+		$page = TranslatablePage::newFromTitle( $this->group->getTitle() );
+		if ( $page->getMarkedTag() === null ) {
+			return '';
+		}
+
+		$languageCode = $this->options['language'];
+		if ( $languageCode === $page->getSourceLanguageCode() ) {
+			return '';
+		}
+
+		$currentTitle = $page->hasCustomTranslationPageTitle( $languageCode ) ?
+			$page->getTranslationPageTitle( $languageCode )->getPrefixedText() :
+			'';
+		$languageName = $this->languageNameUtils->getLanguageName( $languageCode );
+		$translateTitle = SpecialPage::getTitleFor( 'Translate' )->getLocalURL();
+		$input = Html::input(
+			'custom-translation-page-title',
+			$currentTitle,
+			'text',
+			[
+				'class' => 'mw-ui-input',
+				'id' => 'mw-translate-custom-translation-page-title',
+				'placeholder' => $this->msg( 'tpt-custom-translation-page-title-placeholder' )->text(),
+				'required' => true,
+				'maxlength' => 255,
+			]
+		);
+
+		return Html::rawElement(
+			'form',
+			[
+				'action' => $translateTitle,
+				'method' => 'post',
+				'class' => 'mw-translate-custom-translation-page-form',
+			],
+			Html::hidden( 'title', $this->getPageTitle()->getPrefixedText() ) .
+			Html::hidden( 'group', $this->group->getId() ) .
+			Html::hidden( 'language', $languageCode ) .
+			Html::hidden( 'custom-translation-page-title-submit', '1' ) .
+			Html::hidden( 'token', $this->getContext()->getCsrfTokenSet()->getToken() ) .
+			Html::rawElement(
+				'label',
+				[ 'for' => 'mw-translate-custom-translation-page-title' ],
+				$this->msg( 'tpt-custom-translation-page-title-label', $languageName )->escaped()
+			) .
+			$input .
+			Html::rawElement(
+				'p',
+				[],
+				$this->msg( 'tpt-custom-translation-page-title-help' )->escaped()
+			) .
+			Html::submitButton(
+				$this->msg( 'tpt-custom-translation-page-title-submit' )->text(),
+				[ 'class' => 'mw-ui-button mw-ui-progressive' ]
+			)
+		);
+	}
+
+	private function handleCustomTranslationPageTitleSubmission(): void {
+		$request = $this->getRequest();
+		if ( !$request->wasPosted() || !$request->getCheck( 'custom-translation-page-title-submit' ) ) {
+			return;
+		}
+
+		if ( !$this->getContext()->getCsrfTokenSet()->matchTokenField( 'token' ) ) {
+			throw new \PermissionsError( 'pagetranslation' );
+		}
+		if ( !$this->getUser()->isAllowed( 'pagetranslation' ) ) {
+			throw new \PermissionsError( 'pagetranslation' );
+		}
+		if ( !$this->group instanceof WikiPageMessageGroup ) {
+			$this->getOutput()->wrapWikiMsg(
+				Html::errorBox( '$1' ),
+				'tpt-custom-translation-page-title-not-available'
+			);
+			return;
+		}
+
+		$page = TranslatablePage::newFromTitle( $this->group->getTitle() );
+		$languageCode = $request->getText( 'language' );
+		$language = $this->languageNameUtils->isKnownLanguageTag( $languageCode );
+		$groupLanguages = $this->group->getTranslatableLanguages();
+		if (
+			$page->getMarkedTag() === null ||
+			$language === null ||
+			( $groupLanguages !== null && !isset( $groupLanguages[$languageCode] ) ) ||
+			$languageCode === $page->getSourceLanguageCode()
+		) {
+			$this->getOutput()->wrapWikiMsg(
+				Html::errorBox( '$1' ),
+				'tpt-custom-translation-page-title-not-available'
+			);
+			return;
+		}
+
+		$titleText = trim( $request->getText( 'custom-translation-page-title' ) );
+		$targetTitle = Title::newFromText( $titleText, $page->getTitle()->getNamespace() );
+		if (
+			!$targetTitle ||
+			$targetTitle->getInterwiki() !== '' ||
+			in_array( $targetTitle->getNamespace(), [ NS_SPECIAL, NS_TRANSLATIONS ], true ) ||
+			$targetTitle->equals( $page->getTitle() )
+		) {
+			$this->getOutput()->wrapWikiMsg(
+				Html::errorBox( '$1' ),
+				'tpt-custom-translation-page-title-invalid'
+			);
+			return;
+		}
+
+		$currentTarget = $page->getTranslationPageTitle( $languageCode );
+		$hasCustomTitle = $page->hasCustomTranslationPageTitle( $languageCode );
+		if ( $hasCustomTitle && !$currentTarget->equals( $targetTitle ) ) {
+			$this->getOutput()->wrapWikiMsg(
+				Html::errorBox( '$1' ),
+				'tpt-custom-translation-page-title-already-set'
+			);
+			return;
+		}
+
+		$translationPageMapping = Services::getInstance()->getRevTagStore()
+			->getTranslationPageMapping( $targetTitle );
+		$isAlreadyLinkedTranslationPage = $translationPageMapping !== null &&
+			$translationPageMapping['sourcePageId'] === $page->getTitle()->getArticleID() &&
+			$translationPageMapping['languageCode'] === $languageCode;
+		if (
+			$targetTitle->exists() &&
+			!$isAlreadyLinkedTranslationPage
+		) {
+			$this->getOutput()->wrapWikiMsg(
+				Html::errorBox( '$1' ),
+				'tpt-custom-translation-page-title-exists'
+			);
+			return;
+		}
+
+		$permissionManager = MediaWikiServices::getInstance()->getPermissionManager();
+		if ( !$isAlreadyLinkedTranslationPage && (
+			!$permissionManager->userCan( 'createpage', $this->getUser(), $targetTitle ) ||
+			!$permissionManager->userCan( 'edit', $this->getUser(), $targetTitle )
+		) ) {
+			$this->getOutput()->wrapWikiMsg(
+				Html::errorBox( '$1' ),
+				'tpt-custom-translation-page-title-no-permission'
+			);
+			return;
+		}
+
+		if ( !$hasCustomTitle && $page->getTitle()->getSubpage( $languageCode )->exists() ) {
+			$this->getOutput()->wrapWikiMsg(
+				Html::errorBox( '$1' ),
+				'tpt-custom-translation-page-title-default-exists'
+			);
+			return;
+		}
+
+		if ( !$hasCustomTitle ) {
+			$page->setTranslationPageTitle( $languageCode, $targetTitle );
+		}
+
+		MediaWikiServices::getInstance()->getJobQueueGroup()->push(
+			RenderTranslationPageJob::newJobForPage( $page, $languageCode )
+		);
+		$this->getOutput()->wrapWikiMsg(
+			Html::successBox( '$1' ),
+			'tpt-custom-translation-page-title-saved'
+		);
 	}
 
 	private function messageSelector(): string {

@@ -583,7 +583,6 @@
 		} ).on( 'keypress', function () {
 			$( this ).trigger( 'click' );
 		} );
-
 		if ( $.fn.translateeditor ) {
 			// New translation editor
 			$( '.tux-message' ).translateeditor();

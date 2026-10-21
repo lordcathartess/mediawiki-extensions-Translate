@@ -9,7 +9,7 @@ use MediaWiki\Extension\Translate\MessageGroupProcessing\DeleteTranslatableBundl
 use MediaWiki\Extension\Translate\MessageGroupProcessing\SubpageListBuilder;
 use MediaWiki\Extension\Translate\MessageGroupProcessing\TranslatableBundle;
 use MediaWiki\Extension\Translate\MessageGroupProcessing\TranslatableBundleFactory;
-use MediaWiki\Extension\Translate\Utilities\Utilities;
+use MediaWiki\Extension\Translate\MessageLoading\MessageHandle;
 use MediaWiki\Title\Title;
 use MediaWiki\User\UserIdentity;
 
@@ -49,11 +49,13 @@ class TranslatableBundleDeleter {
 		if ( $isTranslationPage ) {
 			$resultSet = $this->subpageBuilder->getEmptyResultSet();
 
-			[ $titleKey, ] = Utilities::figureMessage( $title->getPrefixedDBkey() );
-			$translatablePage = TranslatablePage::newFromTitle( Title::newFromText( $titleKey ) );
+			$handle = new MessageHandle( $title );
+			$translatablePage = TranslatablePage::newFromTitle( $handle->getTitleForBase() );
 
 			$resultSet['translationPages'] = [ $title ];
-			$resultSet['translationUnitPages'] = $translatablePage->getTranslationUnitPages( $languageCode );
+			$resultSet['translationUnitPages'] = $translatablePage->getTranslationUnitPages(
+				$languageCode ?? $handle->getCode()
+			);
 			return $resultSet;
 		} else {
 			$bundle = $this->bundleFactory->getValidBundle( $title );
@@ -117,8 +119,7 @@ class TranslatableBundleDeleter {
 
 	private function getValidBundleFromTitle( Title $bundleTitle, bool $isTranslation ): TranslatableBundle {
 		if ( $isTranslation ) {
-			[ $key, ] = Utilities::figureMessage( $bundleTitle->getPrefixedDBkey() );
-			$bundleTitle = Title::newFromText( $key );
+			$bundleTitle = ( new MessageHandle( $bundleTitle ) )->getTitleForBase();
 		}
 
 		return $this->bundleFactory->getValidBundle( $bundleTitle );

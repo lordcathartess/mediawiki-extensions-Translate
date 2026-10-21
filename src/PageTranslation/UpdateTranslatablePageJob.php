@@ -166,29 +166,32 @@ class UpdateTranslatablePageJob extends GenericTranslateJob {
 
 		$jobs = [];
 
-		$jobTitles = $page->getTranslationPages();
+		$jobLanguages = [];
+		foreach ( $page->getTranslationPages() as $translationPageTitle ) {
+			$languageCode = ( new MessageHandle( $translationPageTitle ) )->getCode();
+			if ( $languageCode !== '' ) {
+				$jobLanguages[$languageCode] = true;
+			}
+		}
+
 		// Ensure that we create the source language page when page is marked for translation.
-		$jobTitles[] = $page->getTitle()->getSubpage( $page->getSourceLanguageCode() );
+		$jobLanguages[$page->getSourceLanguageCode()] = true;
 		// In some cases translation page may be missing even though translations exist. One such case
 		// is when FuzzyBot makes edits, which suppresses render jobs. There may also be bugs with the
 		// render jobs failing. Add jobs based on message group stats to create self-healing process.
 		$stats = MessageGroupStats::forGroup( $page->getMessageGroupId() );
 		foreach ( $stats as $languageCode => $languageStats ) {
 			if ( $languageStats[MessageGroupStats::TRANSLATED] > 0 && $languageCode !== $documentationLanguageCode ) {
-				$jobTitles[] = $page->getTitle()->getSubpage( $languageCode );
+				$jobLanguages[$languageCode] = true;
 			}
 		}
 
-		// These jobs can be deduplicated by the job queue as well, but it's simple to do it here ourselves.
-		// Titles have __toString method that returns the prefixed text so array_unique should work.
-		$jobTitles = array_unique( $jobTitles );
-		foreach ( $jobTitles as $t ) {
+		foreach ( array_keys( $jobLanguages ) as $languageCode ) {
 			if ( $nonPrioritizedJobs ) {
-				$jobs[] = RenderTranslationPageJob::newNonPrioritizedJob( $t );
+				$jobs[] = RenderTranslationPageJob::newNonPrioritizedJobForPage( $page, $languageCode );
 			} else {
-				$jobs[] = RenderTranslationPageJob::newJob( $t );
+				$jobs[] = RenderTranslationPageJob::newJobForPage( $page, $languageCode );
 			}
-
 		}
 
 		return $jobs;

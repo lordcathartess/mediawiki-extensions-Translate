@@ -1,8 +1,10 @@
 <?php
 declare( strict_types = 1 );
 
+use MediaWiki\Extension\Translate\MessageLoading\MessageHandle;
 use MediaWiki\Extension\Translate\PageTranslation\TranslatablePage;
 use MediaWiki\Extension\Translate\Services;
+use MediaWiki\Title\Title;
 
 /**
  * @author Niklas Laxström
@@ -38,5 +40,46 @@ class TranslatablePageIntegrationTest extends MediaWikiIntegrationTestCase {
 		$this->assertFalse( TranslatablePage::isSourcePage( $translatablePage->getTitle() ) );
 
 		$this->resetServices();
+	}
+
+	public function testCustomTranslationPageTitleIsRecognized(): void {
+		$user = $this->getTestSysop()->getUser();
+		$sourcePage = $this->createMarkedTranslatablePage(
+			'Source page',
+			'Translated source text',
+			$user
+		);
+		$customTitle = Title::newFromText( 'Custom German page' );
+		$sourcePage->setTranslationPageTitle( 'de', $customTitle );
+
+		$editStatus = $this->editPage(
+			$customTitle,
+			ContentHandler::makeContent( 'German text', $customTitle ),
+			__METHOD__,
+			NS_MAIN,
+			$user
+		);
+		$revisionId = $editStatus->value['revision-record']->getId();
+		Services::getInstance()->getRevTagStore()->setTranslationPageMapping(
+			$customTitle,
+			$sourcePage->getTitle()->getArticleID(),
+			'de',
+			$revisionId
+		);
+
+		$resolvedPage = TranslatablePage::isTranslationPage( $customTitle );
+		$this->assertInstanceOf( TranslatablePage::class, $resolvedPage );
+		$this->assertSame( 'de', ( new MessageHandle( $customTitle ) )->getCode() );
+		$this->assertTrue(
+			( new MessageHandle( $customTitle ) )->getTitleForBase()->equals( $sourcePage->getTitle() )
+		);
+		$this->assertContains(
+			$customTitle->getPrefixedText(),
+			array_map(
+				static fn ( Title $title ) => $title->getPrefixedText(),
+				$sourcePage->getTranslationPages()
+			)
+		);
+		$this->assertSame( 'de', $resolvedPage->getTargetLanguageCode() );
 	}
 }
